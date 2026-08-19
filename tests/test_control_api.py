@@ -411,3 +411,68 @@ def test_on_behalf_of_is_refused_for_a_non_operator_actor():
 
     assert r["ok"] is False
     assert "reserved for the 'operator' actor" in r["error"]
+
+
+# ── read route (the approval gates' only way in) ───────────────────────
+
+
+def test_get_task_ok(env, client):
+    _, tmp = env
+    tid = _seed(tmp)
+    r = client.get(f"/tasks/{tid}", headers=AUTH)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == tid
+    assert body["status"] == "submitted"
+    assert body["target_agent"] == "developer"
+
+
+def test_get_task_serialises_timestamps(env, client):
+    """`created` and every history timestamp come back from YAML as datetimes, which
+    json.dumps refuses. Without conversion this route 500s on every task."""
+    _, tmp = env
+    tid = _seed(tmp)
+    r = client.get(f"/tasks/{tid}", headers=AUTH)
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body["created"], str)
+    assert isinstance(body["history"][0]["timestamp"], str)
+
+
+def test_get_task_exposes_approval_history(env, client):
+    """The whole point of the route: an approval gate must be able to see that the
+    operator — and only the operator — moved this task to `approved`."""
+    _, tmp = env
+    tid = _seed(tmp)
+    assert client.post(f"/tasks/{tid}/approve", headers=AUTH, json={}).status_code == 200
+    body = client.get(f"/tasks/{tid}", headers=AUTH).json()
+    approvals = [h for h in body["history"] if h["status"] == "approved"]
+    assert len(approvals) == 1
+    assert approvals[0]["actor"] == "operator"
+
+
+def test_get_task_requires_secret(env, client):
+    _, tmp = env
+    tid = _seed(tmp)
+    assert client.get(f"/tasks/{tid}").status_code == 401
+    assert client.get(f"/tasks/{tid}", headers={"X-Task-Queue-Secret": "nope"}).status_code == 401
+
+
+def test_get_task_not_found_404(env, client):
+    r = client.get("/tasks/11111111-2222-3333-4444-555555555555", headers=AUTH)
+    assert r.status_code == 404
+
+
+def test_get_task_invalid_id_400(env, client):
+    r = client.get("/tasks/not-a-uuid", headers=AUTH)
+    assert r.status_code == 400
+
+
+def test_get_task_does_not_mutate(env, client):
+    """Read-only means read-only — the route must not advance anything it touches."""
+    _, tmp = env
+    tid = _seed(tmp)
+    before = get_task_handler(tid, queue_dir=str(tmp))
+    client.get(f"/tasks/{tid}", headers=AUTH)
+    after = get_task_handler(tid, queue_dir=str(tmp))
+    assert before == after

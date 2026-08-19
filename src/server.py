@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from datetime import date, datetime
 
 from fastmcp import FastMCP
 from starlette.requests import Request
@@ -381,6 +382,19 @@ def _status_for(result: dict) -> int:
     return 400
 
 
+def _jsonable(value):
+    """YAML round-trips `created` and every history timestamp as real datetimes, and
+    json.dumps refuses those. The MCP tool path never noticed — its serializer handles
+    them — so this is needed only by the read route below."""
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    return value
+
+
 def _control_response(result: dict) -> JSONResponse:
     return JSONResponse(result, status_code=_status_for(result))
 
@@ -509,6 +523,31 @@ async def http_update(request: Request) -> JSONResponse:
         queue_dir=QUEUE_DIR,
     )
     return _control_response(result)
+
+
+@mcp.custom_route("/tasks/{task_id}", methods=["GET"])
+async def http_get_task(request: Request) -> JSONResponse:
+    """
+    Read one task, including its history. The only *read* route on this surface.
+
+    It exists for the approval gates outside this service: the deploy-broker and the
+    Mautic gateway have to decide whether a human really approved a specific piece of
+    work before they touch production, and "the caller passed a flag saying so" is not
+    an answer. They hold the shared secret, fetch the task, and check the history for an
+    `approved` entry written by the operator — a claim only these routes can make.
+
+    Read-only on purpose. Nothing here mutates, so widening the operator surface is not
+    part of the bargain; the gates still go through /tasks/{id}/update to record what
+    they did with the approval they were given.
+    """
+    if not _authorized(request):
+        return _unauthorized()
+    result = get_task_handler(task_id=request.path_params["task_id"], queue_dir=QUEUE_DIR)
+    # get_task_handler returns the task dict itself on success (no "ok" key), and
+    # {"ok": False, ...} on failure — mirror that split into the HTTP status.
+    if result.get("ok") is False:
+        return _control_response(result)
+    return JSONResponse(_jsonable(result), status_code=200)
 
 
 @mcp.custom_route("/queue/summary", methods=["GET"])
