@@ -6,7 +6,7 @@
 
 To report a vulnerability, use one of these channels:
 
-- **GitHub private disclosure:** Use the [Security tab](https://github.com/TadMSTR/task-queue-mcp/security/advisories/new) to submit a private advisory.
+- **GitHub private disclosure:** Use the [Security tab](https://github.com/tobidee/task-queue-mcp/security/advisories/new) to submit a private advisory.
 - **Email:** Send a description to `security.i9v75@8alias.com` with the subject line `[task-queue-mcp] Security Report`.
 
 Include as much detail as possible: the affected component, steps to reproduce, and potential impact.
