@@ -525,6 +525,40 @@ async def http_update(request: Request) -> JSONResponse:
     return _control_response(result)
 
 
+@mcp.custom_route("/tasks/submit", methods=["POST"])
+async def http_submit(request: Request) -> JSONResponse:
+    """
+    Submit a task from OUTSIDE an agent session — the machine-side of the operator
+    surface. First (and so far only) caller: the doctor watcher on the host, which
+    files its findings as a fix task so the dispatcher bell fires and the operator
+    can approve the repair with one click instead of parsing a log.
+
+    source_agent is a free label here ("doctor"), not an authenticated identity —
+    same trust model as every other route on this surface: whoever holds the shared
+    secret already IS the operator; a label cannot escalate anything. The handler
+    validates it non-empty and it shows up honestly in history.
+    """
+    if not _authorized(request):
+        return _unauthorized()
+    body = await _json_body(request)
+    result = submit_task_handler(
+        source_agent=body.get("source_agent", "doctor"),
+        target_agent=body.get("target_agent", ""),
+        task_type=body.get("task_type", "fix"),
+        summary=body.get("summary", ""),
+        description=body.get("description", ""),
+        risk_level=body.get("risk_level", "medium"),
+        requires_approval=bool(body.get("requires_approval", True)),
+        priority=body.get("priority", "high"),
+        context_refs=body.get("context_refs") or [],
+        ttl_days=int(body.get("ttl_days", 14)),
+        workflow_mode=body.get("workflow_mode", "auto"),
+        originating_task_id=None,
+        queue_dir=QUEUE_DIR,
+    )
+    return _control_response(result)
+
+
 @mcp.custom_route("/tasks/{task_id}", methods=["GET"])
 async def http_get_task(request: Request) -> JSONResponse:
     """
