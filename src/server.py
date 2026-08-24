@@ -76,6 +76,31 @@ def _archive_days() -> int:
 ARCHIVE_DAYS = _archive_days()
 SWEEP_INTERVAL_SECONDS = 3600
 
+# Basis-URL des Agenten-Cockpits (z. B. https://apps.<domain>/cockpit/).
+# Wenn gesetzt, haengen submit/get/list an ihre Antworten einen fertigen
+# Deep-Link `cockpit_url` an — der Agent kann dem Menschen damit IMMER den
+# direkten Weg zu Freigabe/Status nennen, ohne die URL zu kennen oder zu
+# raten. Leer = Feld fehlt (Auslieferungszustand; rein additiv, kein Client
+# muss es kennen).
+COCKPIT_URL = os.environ.get("TASK_QUEUE_COCKPIT_URL", "").strip().rstrip("/")
+
+
+def _cockpit_link(task_id) -> str | None:
+    if not COCKPIT_URL or not task_id:
+        return None
+    return f"{COCKPIT_URL}/#task={task_id}"
+
+
+def _with_cockpit_url(result: dict) -> dict:
+    """Deep-Link an eine Handler-Antwort haengen (submit: {ok, task_id, ...};
+    get: der Task selbst mit id). Fehlerantworten bleiben unberuehrt."""
+    if result.get("ok") is False:
+        return result
+    link = _cockpit_link(result.get("task_id") or result.get("id"))
+    if link:
+        result["cockpit_url"] = link
+    return result
+
 
 async def _archive_sweeper() -> None:
     """Hourly retention sweep, first run at startup. Blocking file work happens
@@ -165,7 +190,9 @@ def submit_task(
     source_agent must be your own authenticated identity; you cannot file a task as
       another agent.
     Returns: {ok, task_id, filename} on success, plus auto_closed_task_id when a parent was
-    closed; or {ok: false, error} on failure.
+    closed, plus cockpit_url (direct approval/status deep link — ALWAYS pass this on to the
+    human when you mention the task) when the server is configured with a cockpit URL;
+    or {ok: false, error} on failure.
     """
     # source_agent is an identity claim, not just a label — the submit-time auto-close
     # decides the return shape from it, so spoofing it is a route to terminally closing
@@ -174,7 +201,7 @@ def submit_task(
     if not ok:
         return {"ok": False, "error": source_agent}
 
-    return submit_task_handler(
+    return _with_cockpit_url(submit_task_handler(
         source_agent=source_agent,
         target_agent=target_agent,
         task_type=task_type,
@@ -188,7 +215,7 @@ def submit_task(
         workflow_mode=workflow_mode,
         originating_task_id=originating_task_id,
         queue_dir=QUEUE_DIR,
-    )
+    ))
 
 
 @mcp.tool()
@@ -210,7 +237,7 @@ def list_tasks(
     only if they are terminal — open work stays listed however old it is, so nothing that
     is still someone's responsibility can quietly age out of view.
     """
-    return list_tasks_handler(
+    tasks = list_tasks_handler(
         target_agent=target_agent,
         source_agent=source_agent,
         status=status,
@@ -219,15 +246,17 @@ def list_tasks(
         limit=limit,
         queue_dir=QUEUE_DIR,
     )
+    return [_with_cockpit_url(t) for t in tasks]
 
 
 @mcp.tool()
 def get_task(task_id: str) -> dict:
     """
     Get a task by UUID. Searches main queue then archive/.
-    Returns full task dict or {ok: false, error}.
+    Returns full task dict (plus cockpit_url, the human-facing deep link, when the
+    server knows the cockpit) or {ok: false, error}.
     """
-    return get_task_handler(task_id=task_id, queue_dir=QUEUE_DIR)
+    return _with_cockpit_url(get_task_handler(task_id=task_id, queue_dir=QUEUE_DIR))
 
 
 @mcp.tool()
@@ -640,7 +669,7 @@ async def http_submit(request: Request) -> JSONResponse:
         originating_task_id=None,
         queue_dir=QUEUE_DIR,
     )
-    return _control_response(result)
+    return _control_response(_with_cockpit_url(result))
 
 
 @mcp.custom_route("/tasks/{task_id}", methods=["GET"])
@@ -665,7 +694,7 @@ async def http_get_task(request: Request) -> JSONResponse:
     # {"ok": False, ...} on failure — mirror that split into the HTTP status.
     if result.get("ok") is False:
         return _control_response(result)
-    return JSONResponse(_jsonable(result), status_code=200)
+    return JSONResponse(_jsonable(_with_cockpit_url(result)), status_code=200)
 
 
 @mcp.custom_route("/queue/summary", methods=["GET"])

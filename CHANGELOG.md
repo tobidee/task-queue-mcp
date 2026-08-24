@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-24
+
+### Added
+- **`cockpit_url` deep links in responses.** With `TASK_QUEUE_COCKPIT_URL` set
+  (e.g. `https://apps.<domain>/cockpit/`), `submit_task`, `get_task` and
+  `list_tasks` — MCP tools and the control routes alike — return a ready-made
+  `cockpit_url` (`<base>/#task=<id>`) per task. Agents can therefore ALWAYS
+  hand the human the direct approval/status link instead of a bare task id,
+  without knowing the deployment's URL. Unset = field absent; purely additive.
+
 ## [0.9.0] - 2026-08-24
 
 ### Added
