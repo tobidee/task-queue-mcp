@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-24
+
+### Added
+- **Retention: terminal tasks now leave the main directory.** Until now nothing ever
+  *wrote* `archive/` — it was read (`include_archived`, `get_task`) and mutations on
+  archived tasks were refused, but the mover lived in upstream's task-dispatcher, which
+  this fork deliberately does not run. Every deployment's queue directory only ever grew:
+  `ttl_days` is a display filter, the files stayed, every read re-parsed them, and
+  `.locks/` accumulated one file per task with no cleanup at all.
+
+  New env `TASK_QUEUE_ARCHIVE_DAYS` (empty/`0` = off, the delivery default; malformed =
+  refuse to start): an hourly background sweep (first run at startup) moves terminal
+  tasks whose **last activity** — max history timestamp, else `created` — is older than
+  the configured days into `archive/`, atomically (`os.rename` within the same
+  filesystem), and removes their lock files. Only `completed`/`failed`/`cancelled` are
+  ever eligible: open work never ages out of placement, however old (the vikunja#395
+  principle, applied to placement). Orphaned `.locks/` entries older than 24 h whose task
+  no longer exists in the main directory are collected by the same sweep.
+- **`POST /tasks/{task_id}/archive`** on the control surface (same shared-secret gate):
+  move one terminal task to `archive/` now, without waiting for the sweep. Placement
+  only — no history entry, no state change; non-terminal tasks are refused, archived
+  tasks refuse it again with `already archived`.
+
+### Fixed
+- **The archived-task guard was a substring test.** `"archive" in _path` also matched a
+  queue directory that merely *contains* the word (a customer volume path, a pytest tmp
+  dir named after an archive test) — on such a deployment every mutation on every task
+  would have been refused as archived. All five sites now compare the file's parent
+  directory against `queue_dir/archive` (`_is_archived_path`).
+
 ## [0.8.2] - 2026-08-16
 
 ### Fixed

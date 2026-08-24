@@ -155,6 +155,17 @@ def _load_all_tasks(queue_dir: str, include_archived: bool = False) -> list[dict
     return tasks
 
 
+def _is_archived_path(path: str, queue_dir: str) -> bool:
+    """True iff the task file lives in queue_dir/archive/. Used to refuse
+    mutations on archived tasks. Deliberately a directory comparison, not a
+    substring test: `"archive" in path` also matched a queue_dir that merely
+    CONTAINS the word (a customer volume path, a pytest tmp dir named after an
+    archive test) and would have refused every mutation on such a deployment."""
+    return os.path.dirname(os.path.abspath(path)) == os.path.join(
+        os.path.abspath(queue_dir), "archive"
+    )
+
+
 def _write_task_atomic(path: str, data: dict) -> None:
     """Write task data atomically: write to .tmp then os.rename() to final path."""
     tmp = path + ".tmp"
@@ -498,7 +509,7 @@ def update_task_handler(
         if task is None:
             return {"ok": False, "error": "not found"}
 
-        if "archive" in task.get("_path", ""):
+        if _is_archived_path(task.get("_path", ""), queue_dir):
             return {"ok": False, "error": "task is archived and cannot be updated"}
 
         current_status = task.get("status")
@@ -635,7 +646,7 @@ def _auto_close_originating_task(
                 "auto-close skipped: originating task %s not found", originating_task_id[:8]
             )
             return None
-        if "archive" in parent.get("_path", ""):
+        if _is_archived_path(parent.get("_path", ""), queue_dir):
             return None
 
         parent_status = parent.get("status")
@@ -770,7 +781,7 @@ def set_task_status_handler(
         if task is None:
             return {"ok": False, "error": "not found"}
 
-        if "archive" in task.get("_path", ""):
+        if _is_archived_path(task.get("_path", ""), queue_dir):
             return {"ok": False, "error": "task is archived and cannot be updated"}
 
         current_status = task.get("status")
@@ -1038,7 +1049,7 @@ def amend_task_handler(
         if task is None:
             return {"ok": False, "error": "not found"}
 
-        if "archive" in task.get("_path", ""):
+        if _is_archived_path(task.get("_path", ""), queue_dir):
             return {"ok": False, "error": "task is archived and cannot be amended"}
 
         current_status = task.get("status")
@@ -1116,3 +1127,180 @@ def amend_task_handler(
         "amendment_count": len(amendments),
         "agent_may_have_started": current_status == "in-progress",
     }
+
+
+# ---------------------------------------------------------------------------
+# Archiving / retention
+#
+# Until v0.9.0 nothing ever *wrote* archive/ — it was read (include_archived,
+# get_task) and mutations on archived tasks were refused, but the mover lived in
+# upstream's task-dispatcher, which this fork deliberately does not run. The
+# result on every deployment was a queue directory that only ever grew: terminal
+# tasks stayed in the default view forever (ttl_days is a display filter, the
+# file remains), every read re-parsed them, and .locks/ accumulated one file per
+# task with no cleanup at all.
+#
+# The writer side lives HERE, not in a client with an rw mount, because this
+# module owns the directory: the per-task flock protocol, the atomic-write
+# convention, and the uid the volume belongs to. A second YAML writer outside
+# this process is exactly what the control API exists to prevent.
+# ---------------------------------------------------------------------------
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalize a possibly-naive datetime to aware UTC. PyYAML >= 5.3 loads our
+    own timestamps aware, but files written by other direct-YAML writers (the
+    dispatcher, hand-edits, tests) may carry naive ones — a naive/aware
+    comparison raises, and a sweep must not die on one odd file."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def _last_activity(task: dict) -> datetime | None:
+    """The most recent timestamp on a task: max over history entries, falling
+    back to created. Used instead of `created` alone so a task that was worked
+    on long after submission does not age out of view early."""
+    stamps = [
+        _as_utc(entry["timestamp"])
+        for entry in task.get("history") or []
+        if isinstance(entry, dict) and isinstance(entry.get("timestamp"), datetime)
+    ]
+    created = task.get("created")
+    if isinstance(created, datetime):
+        stamps.append(_as_utc(created))
+    return max(stamps) if stamps else None
+
+
+def _remove_lock_file(queue_dir: str, task_id: str) -> None:
+    """Best-effort removal of a task's lock file. Safe against concurrent
+    lockers: a holder of the unlinked inode keeps its flock, and any later
+    mutation attempt creates a fresh file, locks it, and then finds the task
+    archived — every path ends in the existing 'task is archived' refusal."""
+    try:
+        os.unlink(os.path.join(queue_dir, ".locks", f"{task_id}.lock"))
+    except FileNotFoundError:
+        pass
+
+
+def archive_task_handler(task_id: str, actor: str, queue_dir: str | None = None) -> dict:
+    """
+    Move a terminal task into archive/ immediately, without waiting for the sweep.
+    Operator surface only — reachable via the control API, like cancel.
+
+    Archiving is placement, not state: the task file is renamed unchanged (no
+    history entry is written — terminal tasks are immutable, and the move is
+    visible in the file's location). Reads keep finding it via include_archived
+    and get_task; every mutation path already refuses archived tasks.
+    """
+    if queue_dir is None:
+        queue_dir = os.environ.get("TASK_QUEUE_DIR", "/task-queue")
+
+    try:
+        uuid.UUID(task_id)
+    except ValueError:
+        return {"ok": False, "error": "invalid task_id format"}
+
+    with _task_lock(queue_dir, task_id):
+        tasks = _load_all_tasks(queue_dir, include_archived=True)
+        task = next((t for t in tasks if t.get("id") == task_id), None)
+
+        if task is None:
+            return {"ok": False, "error": "not found"}
+        if _is_archived_path(task.get("_path", ""), queue_dir):
+            return {"ok": False, "error": "task is already archived"}
+
+        current_status = task.get("status")
+        if current_status not in TERMINAL_STATUSES:
+            return {
+                "ok": False,
+                "error": (
+                    f"Task is in non-terminal status {current_status!r} — only "
+                    f"{sorted(TERMINAL_STATUSES)} tasks can be archived."
+                ),
+            }
+
+        path = task["_path"]
+        archive_dir = os.path.join(queue_dir, "archive")
+        os.makedirs(archive_dir, exist_ok=True)
+        # Same filesystem by construction (archive/ is a subdirectory), so this
+        # rename is atomic — a concurrent reader sees the task in exactly one place.
+        os.rename(path, os.path.join(archive_dir, os.path.basename(path)))
+
+    _remove_lock_file(queue_dir, task_id)
+    logger.info("task.archive id=%s actor=%s status=%s", task_id[:8], actor, current_status)
+    return {"ok": True, "task_id": task_id}
+
+
+def sweep_archive(queue_dir: str, days: int) -> int:
+    """
+    Move terminal tasks whose last activity is more than `days` days ago into
+    archive/. Returns the number of tasks moved. days <= 0 disables the sweep.
+
+    Deliberately narrower than the ttl_days display filter: only TERMINAL
+    statuses are eligible — open work never ages out of the main directory, no
+    matter how old (the vikunja#395 principle, applied to placement).
+    """
+    if days <= 0:
+        return 0
+
+    cutoff = _now() - timedelta(days=days)
+    archive_dir = os.path.join(queue_dir, "archive")
+    moved = 0
+
+    for task in _load_all_tasks(queue_dir):
+        task_id = task.get("id")
+        if not task_id or task.get("status") not in TERMINAL_STATUSES:
+            continue
+        last = _last_activity(task)
+        if last is None or last > cutoff:
+            continue
+
+        path = task["_path"]
+        with _task_lock(queue_dir, task_id):
+            # Re-check under the lock. Terminal states are immutable, so the
+            # status cannot have regressed — but the file may already be gone
+            # (a concurrent manual archive, or a second sweeper).
+            current = _load_task_file(path) if os.path.exists(path) else None
+            if current is None or current.get("status") not in TERMINAL_STATUSES:
+                continue
+            os.makedirs(archive_dir, exist_ok=True)
+            try:
+                os.rename(path, os.path.join(archive_dir, os.path.basename(path)))
+            except FileNotFoundError:
+                continue
+            moved += 1
+        _remove_lock_file(queue_dir, task_id)
+
+    return moved
+
+
+def cleanup_locks(queue_dir: str, max_age_hours: int = 24) -> int:
+    """
+    Remove orphaned .locks/ files: locks whose task no longer exists in the main
+    queue directory and whose mtime is older than max_age_hours. The age guard
+    keeps a lock alive that a concurrent submit is creating right now; locks for
+    archived tasks are removed (mutation attempts on them recreate a transient
+    lock, get refused, and the next sweep collects it again).
+    """
+    lock_dir = os.path.join(queue_dir, ".locks")
+    if not os.path.isdir(lock_dir):
+        return 0
+
+    live_ids = {t.get("id") for t in _load_all_tasks(queue_dir)}
+    cutoff = _now().timestamp() - max_age_hours * 3600
+    removed = 0
+
+    for path in glob.glob(os.path.join(lock_dir, "*.lock")):
+        task_id = os.path.basename(path)[: -len(".lock")]
+        if task_id in live_ids:
+            continue
+        try:
+            if os.stat(path).st_mtime > cutoff:
+                continue
+            os.unlink(path)
+            removed += 1
+        except FileNotFoundError:
+            continue
+
+    return removed

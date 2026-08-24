@@ -1,3 +1,4 @@
+import asyncio
 import hmac
 import json
 import logging
@@ -24,12 +25,15 @@ from src.tools.queue import (
     VALID_STATUSES,
     _load_all_tasks,
     amend_task_handler,
+    archive_task_handler,
     cancel_task_handler,
+    cleanup_locks,
     get_task_handler,
     list_tasks_handler,
     park_task_handler,
     set_task_status_handler,
     submit_task_handler,
+    sweep_archive,
     unpark_task_handler,
     update_task_handler,
 )
@@ -44,6 +48,54 @@ logger = logging.getLogger(__name__)
 QUEUE_DIR = os.environ.get("TASK_QUEUE_DIR", "/task-queue")
 
 
+def _archive_days() -> int:
+    """TASK_QUEUE_ARCHIVE_DAYS: terminal tasks whose last activity is older than
+    this many days are moved to archive/ by an hourly background sweep. Empty or
+    0 disables the sweep (the delivery default — retention is a deployment
+    decision). A malformed value is fatal by design: silently running without
+    retention because of a typo is the misconfiguration this variable exists to
+    end."""
+    raw = os.environ.get("TASK_QUEUE_ARCHIVE_DAYS", "").strip()
+    if not raw:
+        return 0
+    try:
+        days = int(raw)
+    except ValueError:
+        logger.error(
+            "Refusing to start: TASK_QUEUE_ARCHIVE_DAYS=%r is not an integer.", raw
+        )
+        sys.exit(1)
+    if days < 0:
+        logger.error(
+            "Refusing to start: TASK_QUEUE_ARCHIVE_DAYS=%d must be >= 0.", days
+        )
+        sys.exit(1)
+    return days
+
+
+ARCHIVE_DAYS = _archive_days()
+SWEEP_INTERVAL_SECONDS = 3600
+
+
+async def _archive_sweeper() -> None:
+    """Hourly retention sweep, first run at startup. Blocking file work happens
+    in a thread so the flock-holding sweep never stalls the event loop."""
+    while True:
+        try:
+            moved = await asyncio.to_thread(sweep_archive, QUEUE_DIR, ARCHIVE_DAYS)
+            cleaned = await asyncio.to_thread(cleanup_locks, QUEUE_DIR)
+            if moved or cleaned:
+                logger.info(
+                    "archive.sweep moved=%d locks_cleaned=%d (older than %d day(s))",
+                    moved,
+                    cleaned,
+                    ARCHIVE_DAYS,
+                )
+        except Exception:
+            logger.exception("archive.sweep failed — retrying next interval")
+        await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app):
     if not os.path.isdir(QUEUE_DIR):
@@ -53,8 +105,22 @@ async def lifespan(app):
         )
         sys.exit(1)
     logger.info("task-queue-mcp started. Queue dir: %s", QUEUE_DIR)
-    yield
-    logger.info("task-queue-mcp shutting down.")
+    sweeper = None
+    if ARCHIVE_DAYS > 0:
+        sweeper = asyncio.create_task(_archive_sweeper())
+        logger.info(
+            "Archive sweep enabled: terminal tasks idle for more than %d day(s) "
+            "move to archive/ (hourly).",
+            ARCHIVE_DAYS,
+        )
+    else:
+        logger.info("Archive sweep disabled (TASK_QUEUE_ARCHIVE_DAYS unset or 0).")
+    try:
+        yield
+    finally:
+        if sweeper is not None:
+            sweeper.cancel()
+        logger.info("task-queue-mcp shutting down.")
 
 
 # Per-agent bearer tokens for the MCP tool path (vikunja#387). A configuration error here
@@ -520,6 +586,24 @@ async def http_update(request: Request) -> JSONResponse:
         note=body.get("note", ""),
         output=body.get("output"),
         on_behalf_of=body.get("on_behalf_of"),
+        queue_dir=QUEUE_DIR,
+    )
+    return _control_response(result)
+
+
+@mcp.custom_route("/tasks/{task_id}/archive", methods=["POST"])
+async def http_archive(request: Request) -> JSONResponse:
+    """
+    Move a terminal task into archive/ now, without waiting for the hourly sweep.
+    The cockpit's "Archivieren" button, and the way the sweep stays curl-testable.
+    Placement only — no history entry, no state change; non-terminal tasks are
+    refused, and every existing mutation route already refuses archived tasks.
+    """
+    if not _authorized(request):
+        return _unauthorized()
+    result = archive_task_handler(
+        task_id=request.path_params["task_id"],
+        actor=OPERATOR_ACTOR,
         queue_dir=QUEUE_DIR,
     )
     return _control_response(result)
