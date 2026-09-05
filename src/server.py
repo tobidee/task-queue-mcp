@@ -19,6 +19,7 @@ from src.auth import (
     load_agent_tokens,
     require_operator_surface,
 )
+from src.tools import tickets
 from src.tools.queue import (
     NON_TERMINAL_STATUSES,
     OPERATOR_ACTOR,
@@ -406,6 +407,90 @@ def amend_task(task_id: str, amendment: str, actor: str, reason: str = "") -> di
     return amend_task_handler(
         task_id=task_id, amendment=amendment, actor=actor, reason=reason, queue_dir=QUEUE_DIR
     )
+
+
+# ---------------------------------------------------------------------------
+# Tickets (Fork v0.10): am Ende der Mittel ein Ticket beim Kunden — mit dem
+# Transkript der Sitzung. Registriert NUR bei konfiguriertem Ticketsystem
+# (tickets.configured()); die Arbeit macht die Kontrollebene, s. tools/tickets.py.
+
+if tickets.configured():
+
+    @mcp.tool()
+    def ticket_create(
+        titel: str,
+        beschreibung: str,
+        art: str = "aufgabe",
+        bereich: str = "Agenten",
+        quelle: str = "",
+        mit_transkript: bool = True,
+        actor: str | None = None,
+    ) -> dict:
+        """
+        Legt ein Ticket im Ticketsystem dieses Betriebs an — mit dem vollstaendigen,
+        redigierten Transkript DEINER laufenden Sitzung als Anhang (haengt die
+        Kontrollebene selbst an; du musst nichts abschreiben).
+
+        Wann: wenn du am Ende deiner Mittel bist — der Doctor-Befund braucht den
+        Betreiber (Recht, .env, Host), ein Fix griff nicht, dieselbe Sache scheiterte
+        zum zweiten Mal, ein Werkzeug fehlt dir strukturell, oder in der App-Zone steht
+        die Zonen-Regel selbst im Weg (Host-Port, Fremdnetz, Capability, Secret,
+        oeffentliche Route). Vorher dem Nutzer in einem Satz vorschlagen; headless
+        (kein Mensch im Gespraech) direkt anlegen. Vorher ticket_list: gibt es den Fall
+        schon, dort kommentieren (ticket_comment) statt ein zweites zu oeffnen.
+
+        titel: ein Satz, der das Problem benennt. beschreibung (>= 40 Zeichen): Befund —
+        Werkzeug, Argumente, woertliche Antwort, Vermutung — und was der Betreiber tun
+        muesste. art: aufgabe | fehler | feature. bereich: Apps | Frontend | Backend |
+        Cloud/Infrastruktur | Agenten | Prozesse | Daten/Integrationen | Mail/Kommunikation
+        | Sicherheit/Zugaenge | Sonstiges. quelle: kurzer Anlass (z. B. "doctor",
+        "app_lint", "Nutzerwunsch"). Nie Zugangsdaten in Titel/Beschreibung.
+
+        Antwort: {ok, id, url (Link fuer den Menschen — IMMER nennen), openproject_url,
+        status, transkript: {session, beitraege} | null, hinweis} oder {ok: false, error}.
+        Danach: Ticket-Nummer per amend_task an deinen Task, park_task (nicht failed) —
+        die Arbeit wartet auf den Betreiber, sie ist nicht gescheitert.
+        """
+        ok, actor = bind_actor(actor)
+        if not ok:
+            return {"ok": False, "error": actor}
+        return tickets.ticket_create_handler(
+            actor=actor, titel=titel, beschreibung=beschreibung, art=art, bereich=bereich,
+            quelle=quelle, mit_transkript=mit_transkript, ip=tickets.peer_ip(),
+        )
+
+    @mcp.tool()
+    def ticket_list(status: str | None = None, limit: int = 20) -> dict:
+        """
+        Tickets dieses Betriebs, juengste Aenderung zuerst (nur das Projekt dieses
+        Deployments). status: Name wie "Neu", "In Bewertung", "Rueckfrage", "Bereit",
+        "In Arbeit", "Auf DEV", "Review", "Freigegeben", "Live", "Nicht umsetzbar" —
+        leer = alle. Antwort: {ok, tickets: [{id, titel, art, status, bereich, url, ...}]}.
+        """
+        return tickets.ticket_list_handler(status=status, limit=limit)
+
+    @mcp.tool()
+    def ticket_get(ticket_id: int) -> dict:
+        """
+        Ein Ticket mit Beschreibung, Bewertung, Kommentaren und Status. Nur Tickets des
+        eigenen Projekts; fremde Nummern gibt es nicht. Antwort: {ok, ticket}.
+        """
+        return tickets.ticket_get_handler(ticket_id=ticket_id)
+
+    @mcp.tool()
+    def ticket_comment(ticket_id: int, text: str, actor: str | None = None) -> dict:
+        """
+        Kommentar an ein Ticket (als deine Rolle gekennzeichnet): Nachtrag zum Befund,
+        Antwort auf eine Rueckfrage, neuer Stand. Kein Statuswechsel — den macht der
+        Betreiber. Antwort: {ok, id, url}.
+        """
+        ok, actor = bind_actor(actor)
+        if not ok:
+            return {"ok": False, "error": actor}
+        return tickets.ticket_comment_handler(actor=actor, ticket_id=ticket_id, text=text)
+
+else:
+    logger.info("Tickets aus (TASK_QUEUE_TICKETS_ENABLED/CONTROL_URL/CONTROL_SECRET fehlen) — keine ticket_*-Werkzeuge.")
 
 
 # ---------------------------------------------------------------------------

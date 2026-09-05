@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-05
+
+### Added
+- **Ticket tools (`ticket_create`, `ticket_list`, `ticket_get`, `ticket_comment`).**
+  Registered only when `TASK_QUEUE_TICKETS_ENABLED=1` plus
+  `TASK_QUEUE_CONTROL_URL` / `TASK_QUEUE_CONTROL_SECRET` (and optionally
+  `TASK_QUEUE_CONTROL_BASE_URL` for the control plane's base path) are set.
+  The server does not talk to the ticket system itself: it forwards the
+  token-derived actor and the request's peer address to the control plane's
+  `/internal/tickets` routes, which locate the caller's sandbox, read the
+  running session transcript and file the ticket (see the agents-stack,
+  `app/src/tickets.js`). Input validation (art, bereich, minimum description
+  length) happens before any request leaves the server. `src/tools/tickets.py`,
+  `tests/test_tickets.py`.
+
 ## [0.9.1] - 2026-08-24
 
 ### Added
