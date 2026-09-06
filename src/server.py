@@ -548,6 +548,21 @@ if tickets.configured():
             rueckfrage=rueckfrage, antwortvorschlag=antwortvorschlag,
         )
 
+    @mcp.tool()
+    def ticket_progress(ticket_id: int, status: str, nachweis: str = "", actor: str | None = None) -> dict:
+        """
+        Umsetzungs-Fortschritt am Ticket setzen (bauende Rollen, nur eigenes Projekt):
+        "In Arbeit" (aus Bereit, beim Start), "Auf DEV" (aus In Arbeit; nachweis PFLICHT:
+        DEV-Adresse + was du geprueft hast — der Kunde sieht das im Portal und bestaetigt
+        dort), "Live" (aus Freigegeben, nach erfolgreichem promote mit Live-Adresse).
+        Bereit setzt der Betreiber, Freigegeben bestaetigt der Kunde: beides kannst du
+        nicht. Kein Kommentar entsteht. Antwort: {ok, id, status, url, hinweis}.
+        """
+        ok, actor = bind_actor(actor)
+        if not ok:
+            return {"ok": False, "error": actor}
+        return tickets.ticket_progress_handler(actor=actor, ticket_id=ticket_id, status=status, nachweis=nachweis)
+
 else:
     logger.info("Tickets aus (TASK_QUEUE_TICKETS_ENABLED/CONTROL_URL/CONTROL_SECRET fehlen) — keine ticket_*-Werkzeuge.")
 

@@ -248,3 +248,18 @@ def ticket_assess_handler(*, actor: str, ticket_id, projekt: str | None, bewertu
         out["leitplanken"] = lp
         logger.info("ticket.assess actor=%s id=%s projekt=%s empfehlung=%s urteil=%s", actor, n, p or "-", out.get("empfehlung"), lp["urteil"])
     return out
+
+
+def ticket_progress_handler(*, actor: str, ticket_id, status: str, nachweis: str = "", call=_call) -> dict:
+    n = _nummer(ticket_id)
+    if n is None:
+        return {"ok": False, "error": "ticket_id muss eine Nummer sein."}
+    ziel = (status or "").strip()
+    if ziel.lower() not in ("in arbeit", "auf dev", "live"):
+        return {"ok": False, "error": "status muss 'In Arbeit', 'Auf DEV' oder 'Live' sein — Bereit setzt der Betreiber, Freigegeben bestaetigt der Kunde."}
+    if ziel.lower() == "auf dev" and len((nachweis or "").strip()) < 40:
+        return {"ok": False, "error": "nachweis fehlt: DEV-Adresse und was geprueft wurde (mindestens 40 Zeichen)."}
+    out = call("POST", f"/{n}/progress", body={"actor": actor, "status": ziel, "nachweis": (nachweis or "").strip()[:20000]})
+    if out.get("ok"):
+        logger.info("ticket.progress actor=%s id=%s status=%s", actor, n, out.get("status"))
+    return out
