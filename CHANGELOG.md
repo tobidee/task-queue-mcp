@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-05
+
+### Added
+- **`ticket_assess`** for assessor roles: writes Bewertung/Größe/Risiko/Empfehlung/
+  Lösungsvorschlag through the control plane, optionally a Rückfrage to the
+  customer. Before the request the deterministic guardrail check
+  (`src/tools/ticket_validator.py`, a copy of the Leitstand validator) runs over
+  the REAL ticket text and travels with the request; the control plane forces
+  "Nicht umsetzbar"/risk high on BLOCK and refuses "Bereit" on REVIEW. Never
+  sets Bereit/Freigegeben.
+- `projekt` parameter on `ticket_list`/`ticket_get`/`ticket_comment` (assessor
+  roles only; everyone else stays in their own project).
+
 ## [0.10.0] - 2026-09-05
 
 ### Added

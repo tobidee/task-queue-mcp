@@ -71,13 +71,14 @@ def test_create_validiert_vor_dem_request(kwargs, fragment):
 
 def test_list_get_comment():
     calls, call = _aufzeichner({"ok": True})
-    tickets.ticket_list_handler(status="Neu", limit=500, call=call)
-    tickets.ticket_get_handler(ticket_id="#17", call=call)
+    tickets.ticket_list_handler(actor="qa-tester", status="Neu", limit=500, call=call)
+    tickets.ticket_get_handler(actor="qa-tester", ticket_id="#17", projekt="bbp", call=call)
     tickets.ticket_comment_handler(actor="support-ops", ticket_id=17, text=" neuer Stand ", call=call)
-    assert calls[0] == {"method": "GET", "path": "", "body": None, "params": {"status": "Neu", "limit": 100}}
-    assert calls[1]["path"] == "/17"
+    assert calls[0] == {"method": "GET", "path": "", "body": None,
+                        "params": {"status": "Neu", "limit": 100, "projekt": "", "actor": "qa-tester"}}
+    assert calls[1]["path"] == "/17" and calls[1]["params"]["projekt"] == "bbp"
     assert calls[2] == {"method": "POST", "path": "/17/comment",
-                        "body": {"actor": "support-ops", "text": "neuer Stand"}, "params": None}
+                        "body": {"actor": "support-ops", "text": "neuer Stand", "projekt": ""}, "params": None}
     assert tickets.ticket_get_handler(ticket_id="abc", call=call)["ok"] is False
     assert tickets.ticket_comment_handler(actor="x", ticket_id=1, text="  ", call=call)["ok"] is False
 
@@ -142,3 +143,42 @@ def test_call_gegen_kontrollebene(monkeypatch, kontrollebene):
 
 def test_peer_ip_ausserhalb_eines_requests_ist_none():
     assert tickets.peer_ip() is None
+
+
+def test_leitplanken_block_und_ok():
+    lp = tickets.leitplanken("Bitte root-Zugang", "Gebt mir sudo auf dem Server, damit ich die .env lesen kann.")
+    assert lp["urteil"] == "BLOCK" and any("Root" in b for b in lp["befunde"])
+    lp = tickets.leitplanken("Farbe des Buttons", "Der Kaufen-Knopf soll gruen statt blau sein.")
+    assert lp["urteil"] == "OK" and lp["befunde"] == []
+
+
+def test_assess_holt_ticket_und_gibt_leitplanken_mit():
+    calls = []
+
+    def call(method, path="", body=None, params=None):
+        calls.append({"method": method, "path": path, "body": body, "params": params})
+        if method == "GET":
+            return {"ok": True, "ticket": {"id": 7, "titel": "Kubernetes einfuehren",
+                                            "beschreibung": "Wir wollen alles auf kubernetes migrieren."}}
+        return {"ok": True, "id": 7, "empfehlung": body["empfehlung"], "status": "In Bewertung"}
+
+    out = tickets.ticket_assess_handler(
+        actor="ticket-assessor", ticket_id=7, projekt="schlagbaum", bewertung="x" * 100, groesse="xl",
+        risiko="Hoch", empfehlung="bereit", loesungsvorschlag="Compose statt K8s", call=call)
+    assert out["ok"] is True
+    assert calls[0]["method"] == "GET" and calls[0]["params"] == {"projekt": "schlagbaum", "actor": "ticket-assessor"}
+    b = calls[1]["body"]
+    assert calls[1]["path"] == "/7/assess" and b["groesse"] == "XL" and b["risiko"] == "hoch" and b["empfehlung"] == "Bereit"
+    assert b["leitplanken"]["urteil"] == "REVIEW"      # Kubernetes = Review-Muster; Erzwingen macht die Kontrollebene
+    assert out["leitplanken"]["urteil"] == "REVIEW"
+
+
+@pytest.mark.parametrize("kwargs, fragment", [
+    ({"bewertung": "kurz", "groesse": "M", "risiko": "niedrig", "empfehlung": "Bereit"}, "zu kurz"),
+    ({"bewertung": "x" * 100, "groesse": "M", "risiko": "niedrig", "empfehlung": "Sofort"}, "empfehlung"),
+    ({"bewertung": "x" * 100, "groesse": "M", "risiko": "niedrig", "empfehlung": "Bereit", "rueckfrage": "Welche Farbe?"}, "rueckfrage"),
+])
+def test_assess_validiert_vor_dem_request(kwargs, fragment):
+    calls, call = _aufzeichner()
+    out = tickets.ticket_assess_handler(actor="ticket-assessor", ticket_id=7, projekt=None, call=call, **kwargs)
+    assert out["ok"] is False and fragment in out["error"] and calls == []

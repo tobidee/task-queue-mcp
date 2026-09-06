@@ -156,23 +156,92 @@ def ticket_create_handler(
     return ergebnis
 
 
-def ticket_list_handler(*, status: str | None = None, limit: int = 20, call=_call) -> dict:
-    return call("GET", "", params={"status": status or "", "limit": max(1, min(100, int(limit or 20)))})
-
-
-def ticket_get_handler(*, ticket_id, call=_call) -> dict:
+def _nummer(ticket_id):
     try:
-        n = int(str(ticket_id).lstrip("#"))
+        return int(str(ticket_id).lstrip("#"))
     except (TypeError, ValueError):
+        return None
+
+
+def ticket_list_handler(*, actor: str = "", status: str | None = None, limit: int = 20,
+                        projekt: str | None = None, call=_call) -> dict:
+    return call("GET", "", params={"status": status or "", "limit": max(1, min(100, int(limit or 20))),
+                                   "projekt": (projekt or "").strip(), "actor": actor})
+
+
+def ticket_get_handler(*, actor: str = "", ticket_id, projekt: str | None = None, call=_call) -> dict:
+    n = _nummer(ticket_id)
+    if n is None:
         return {"ok": False, "error": "ticket_id muss eine Nummer sein."}
-    return call("GET", f"/{n}")
+    return call("GET", f"/{n}", params={"projekt": (projekt or "").strip(), "actor": actor})
 
 
-def ticket_comment_handler(*, actor: str, ticket_id, text: str, call=_call) -> dict:
-    try:
-        n = int(str(ticket_id).lstrip("#"))
-    except (TypeError, ValueError):
+def ticket_comment_handler(*, actor: str, ticket_id, text: str, projekt: str | None = None, call=_call) -> dict:
+    n = _nummer(ticket_id)
+    if n is None:
         return {"ok": False, "error": "ticket_id muss eine Nummer sein."}
     if not (text or "").strip():
         return {"ok": False, "error": "text fehlt."}
-    return call("POST", f"/{n}/comment", body={"actor": actor, "text": text.strip()[:20000]})
+    return call("POST", f"/{n}/comment", body={"actor": actor, "text": text.strip()[:20000],
+                                               "projekt": (projekt or "").strip()})
+
+
+EMPFEHLUNGEN = ("Bereit", "Rückfrage", "Nicht umsetzbar", "Betreiber-Entscheidung")
+
+
+def leitplanken(subject: str, beschreibung: str) -> dict:
+    """Deterministischer Befund (ticket_validator.py, Kopie des Leitstand-Validators):
+    laeuft VOR jeder Bewertung und wird der Kontrollebene mitgegeben, die daraus
+    Empfehlung/Risiko erzwingt. Der Bewerter kann ihn lesen, aber nicht abwaehlen."""
+    from src.tools import ticket_validator
+
+    b = ticket_validator.pruefen(subject or "", beschreibung or "")
+    def _text(h, praefix=""):
+        if isinstance(h, dict):
+            grund, fund = h.get("grund", ""), h.get("fund", "")
+            return f"{praefix}{grund}: «{fund}»" if fund else f"{praefix}{grund}"
+        return f"{praefix}{h}"
+
+    befunde = [_text(h) for h in (b.get("hart") or [])]
+    befunde += [_text(h, "Review — ") for h in (b.get("review") or [])]
+    befunde += list(b.get("kapazitaet_hinweise") or [])
+    if b.get("groesse_hinweis") in ("L", "XL"):
+        befunde.append(f"Groessen-Hinweis aus dem Text: {b['groesse_hinweis']}")
+    return {"urteil": b.get("urteil", "OK"), "befunde": befunde, "groesse_hinweis": b.get("groesse_hinweis")}
+
+
+def ticket_assess_handler(*, actor: str, ticket_id, projekt: str | None, bewertung: str, groesse: str,
+                          risiko: str, empfehlung: str, loesungsvorschlag: str = "", rueckfrage: str = "",
+                          kommentar: str = "", call=_call) -> dict:
+    n = _nummer(ticket_id)
+    if n is None:
+        return {"ok": False, "error": "ticket_id muss eine Nummer sein."}
+    if len((bewertung or "").strip()) < 80:
+        return {"ok": False, "error": "bewertung ist zu kurz — Notwendigkeit, Sinn, Alternativen, Aufwand, "
+                                      "Auslastung und Risiko in ganzen Saetzen (mindestens 80 Zeichen)."}
+    emp = next((e for e in EMPFEHLUNGEN if e.lower() == (empfehlung or "").strip().lower()), None)
+    if emp is None:
+        return {"ok": False, "error": f"empfehlung muss eines von {' | '.join(EMPFEHLUNGEN)} sein."}
+    if (rueckfrage or "").strip() and emp != "Rückfrage":
+        return {"ok": False, "error": "rueckfrage gesetzt, aber empfehlung ist nicht 'Rückfrage' — eines von beidem anpassen."}
+    # Erst das Ticket holen: Leitplanken laufen ueber den ECHTEN Ticket-Text,
+    # nicht ueber das, was der Bewerter davon zitiert.
+    p = (projekt or "").strip()
+    t = call("GET", f"/{n}", params={"projekt": p, "actor": actor})
+    if not t.get("ok"):
+        return t
+    ticket = t.get("ticket") or {}
+    lp = leitplanken(ticket.get("titel", ""), ticket.get("beschreibung", ""))
+    out = call("POST", f"/{n}/assess", body={
+        "actor": actor, "projekt": p,
+        "bewertung": bewertung.strip()[:20000],
+        "groesse": (groesse or "").strip().upper(), "risiko": (risiko or "").strip().lower(), "empfehlung": emp,
+        "loesungsvorschlag": (loesungsvorschlag or "").strip()[:20000],
+        "rueckfrage": (rueckfrage or "").strip()[:4000],
+        "kommentar": (kommentar or "").strip()[:8000],
+        "leitplanken": lp,
+    })
+    if out.get("ok"):
+        out["leitplanken"] = lp
+        logger.info("ticket.assess actor=%s id=%s projekt=%s empfehlung=%s urteil=%s", actor, n, p or "-", out.get("empfehlung"), lp["urteil"])
+    return out
