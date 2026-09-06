@@ -212,7 +212,7 @@ def leitplanken(subject: str, beschreibung: str) -> dict:
 
 def ticket_assess_handler(*, actor: str, ticket_id, projekt: str | None, bewertung: str, groesse: str,
                           risiko: str, empfehlung: str, loesungsvorschlag: str = "", rueckfrage: str = "",
-                          kommentar: str = "", call=_call) -> dict:
+                          antwortvorschlag: str = "", call=_call) -> dict:
     n = _nummer(ticket_id)
     if n is None:
         return {"ok": False, "error": "ticket_id muss eine Nummer sein."}
@@ -224,6 +224,9 @@ def ticket_assess_handler(*, actor: str, ticket_id, projekt: str | None, bewertu
         return {"ok": False, "error": f"empfehlung muss eines von {' | '.join(EMPFEHLUNGEN)} sein."}
     if (rueckfrage or "").strip() and emp != "Rückfrage":
         return {"ok": False, "error": "rueckfrage gesetzt, aber empfehlung ist nicht 'Rückfrage' — eines von beidem anpassen."}
+    if len((antwortvorschlag or "").strip()) < 40:
+        return {"ok": False, "error": "antwortvorschlag fehlt oder ist zu kurz — drei bis fuenf freundliche Saetze, die der "
+                                      "Betreiber als Antwort an den Kunden uebernehmen kann (mindestens 40 Zeichen)."}
     # Erst das Ticket holen: Leitplanken laufen ueber den ECHTEN Ticket-Text,
     # nicht ueber das, was der Bewerter davon zitiert.
     p = (projekt or "").strip()
@@ -238,7 +241,7 @@ def ticket_assess_handler(*, actor: str, ticket_id, projekt: str | None, bewertu
         "groesse": (groesse or "").strip().upper(), "risiko": (risiko or "").strip().lower(), "empfehlung": emp,
         "loesungsvorschlag": (loesungsvorschlag or "").strip()[:20000],
         "rueckfrage": (rueckfrage or "").strip()[:4000],
-        "kommentar": (kommentar or "").strip()[:8000],
+        "antwortvorschlag": (antwortvorschlag or "").strip()[:8000],
         "leitplanken": lp,
     })
     if out.get("ok"):

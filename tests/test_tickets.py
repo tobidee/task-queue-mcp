@@ -164,11 +164,13 @@ def test_assess_holt_ticket_und_gibt_leitplanken_mit():
 
     out = tickets.ticket_assess_handler(
         actor="ticket-assessor", ticket_id=7, projekt="schlagbaum", bewertung="x" * 100, groesse="xl",
-        risiko="Hoch", empfehlung="bereit", loesungsvorschlag="Compose statt K8s", call=call)
+        risiko="Hoch", empfehlung="bereit", loesungsvorschlag="Compose statt K8s",
+        antwortvorschlag="Danke fuer den Vorschlag. Wir pruefen das und melden uns mit einer Empfehlung.", call=call)
     assert out["ok"] is True
     assert calls[0]["method"] == "GET" and calls[0]["params"] == {"projekt": "schlagbaum", "actor": "ticket-assessor"}
     b = calls[1]["body"]
     assert calls[1]["path"] == "/7/assess" and b["groesse"] == "XL" and b["risiko"] == "hoch" and b["empfehlung"] == "Bereit"
+    assert b["antwortvorschlag"].startswith("Danke") and "kommentar" not in b
     assert b["leitplanken"]["urteil"] == "REVIEW"      # Kubernetes = Review-Muster; Erzwingen macht die Kontrollebene
     assert out["leitplanken"]["urteil"] == "REVIEW"
 
@@ -177,6 +179,7 @@ def test_assess_holt_ticket_und_gibt_leitplanken_mit():
     ({"bewertung": "kurz", "groesse": "M", "risiko": "niedrig", "empfehlung": "Bereit"}, "zu kurz"),
     ({"bewertung": "x" * 100, "groesse": "M", "risiko": "niedrig", "empfehlung": "Sofort"}, "empfehlung"),
     ({"bewertung": "x" * 100, "groesse": "M", "risiko": "niedrig", "empfehlung": "Bereit", "rueckfrage": "Welche Farbe?"}, "rueckfrage"),
+    ({"bewertung": "x" * 100, "groesse": "M", "risiko": "niedrig", "empfehlung": "Bereit"}, "antwortvorschlag"),
 ])
 def test_assess_validiert_vor_dem_request(kwargs, fragment):
     calls, call = _aufzeichner()

@@ -511,21 +511,28 @@ if tickets.configured():
         projekt: str | None = None,
         loesungsvorschlag: str = "",
         rueckfrage: str = "",
-        kommentar: str = "",
+        antwortvorschlag: str = "",
         actor: str | None = None,
     ) -> dict:
         """
         Bewertung eines Kundentickets schreiben — NUR fuer Bewerter-Rollen
         (AGENTS_TICKETS_ASSESSOR_ROLES); andere bekommen 403.
 
-        bewertung (>= 80 Zeichen, fuer Betreiber UND Kunden lesbar): Notwendigkeit,
-        Sinn, Alternativen, Aufwand, Auswirkung auf Auslastung/Betrieb, Risiko, deine
+        ALLES hier ist INTERN: der Kunde sieht weder Bewertung noch Empfehlung; es
+        entsteht kein Kommentar am Ticket. Der Betreiber liest es im Leitstand,
+        entscheidet und antwortet dem Kunden selbst.
+
+        bewertung (>= 80 Zeichen, fuer den Betreiber): Notwendigkeit, Sinn,
+        Alternativen, Aufwand, Auswirkung auf Auslastung/Betrieb, Risiko, deine
         Design-Einschaetzung. groesse: S | M | L | XL. risiko: niedrig | mittel | hoch.
         empfehlung: Bereit | Rückfrage | Nicht umsetzbar | Betreiber-Entscheidung — eine
-        EMPFEHLUNG an den Betreiber; setzen kann Bereit nur er. loesungsvorschlag: was
-        die Umsetzer bauen sollen (oder die bessere Alternative). rueckfrage: die Frage
-        an den Kunden (dann empfehlung "Rückfrage"; Status wird Rückfrage). kommentar:
-        freundliche Kurzfassung fuer den Kunden (optional; erscheint als Kommentar).
+        EMPFEHLUNG; setzen kann Bereit nur der Betreiber. loesungsvorschlag: was die
+        Umsetzer bauen sollen (oder die bessere Alternative). rueckfrage: die Frage, die
+        der Betreiber dem Kunden stellen sollte (nur mit empfehlung "Rückfrage"; der
+        Status bleibt In Bewertung, die Frage stellt der Betreiber). antwortvorschlag
+        (Pflicht, >= 40 Zeichen): drei bis fuenf freundliche Saetze in Kundensprache, die
+        der Betreiber als Antwort uebernehmen oder anpassen kann — der Leitstand belegt
+        sein Antwortfeld damit vor.
 
         Vor dem Schreiben laeuft der deterministische Leitplanken-Befund ueber den
         ECHTEN Ticket-Text: BLOCK erzwingt "Nicht umsetzbar" + Risiko hoch, REVIEW
@@ -538,7 +545,7 @@ if tickets.configured():
         return tickets.ticket_assess_handler(
             actor=actor, ticket_id=ticket_id, projekt=projekt, bewertung=bewertung, groesse=groesse,
             risiko=risiko, empfehlung=empfehlung, loesungsvorschlag=loesungsvorschlag,
-            rueckfrage=rueckfrage, kommentar=kommentar,
+            rueckfrage=rueckfrage, antwortvorschlag=antwortvorschlag,
         )
 
 else:
