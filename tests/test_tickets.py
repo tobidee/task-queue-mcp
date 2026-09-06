@@ -165,7 +165,8 @@ def test_assess_holt_ticket_und_gibt_leitplanken_mit():
     out = tickets.ticket_assess_handler(
         actor="ticket-assessor", ticket_id=7, projekt="schlagbaum", bewertung="x" * 100, groesse="xl",
         risiko="Hoch", empfehlung="bereit", loesungsvorschlag="Compose statt K8s",
-        antwortvorschlag="Danke fuer den Vorschlag. Wir pruefen das und melden uns mit einer Empfehlung.", call=call)
+        antwortvorschlag="Danke fuer den Vorschlag. Wir pruefen das und melden uns mit einer Empfehlung.",
+        umsetzung="betreiber", call=call)
     assert out["ok"] is True
     assert calls[0]["method"] == "GET" and calls[0]["params"] == {"projekt": "schlagbaum", "actor": "ticket-assessor"}
     b = calls[1]["body"]
@@ -179,7 +180,8 @@ def test_assess_holt_ticket_und_gibt_leitplanken_mit():
     ({"bewertung": "kurz", "groesse": "M", "risiko": "niedrig", "empfehlung": "Bereit"}, "zu kurz"),
     ({"bewertung": "x" * 100, "groesse": "M", "risiko": "niedrig", "empfehlung": "Sofort"}, "empfehlung"),
     ({"bewertung": "x" * 100, "groesse": "M", "risiko": "niedrig", "empfehlung": "Bereit", "rueckfrage": "Welche Farbe?"}, "rueckfrage"),
-    ({"bewertung": "x" * 100, "groesse": "M", "risiko": "niedrig", "empfehlung": "Bereit"}, "antwortvorschlag"),
+    ({"bewertung": "x" * 100, "groesse": "M", "risiko": "niedrig", "empfehlung": "Bereit", "umsetzung": "kunde:frontend-developer"}, "antwortvorschlag"),
+    ({"bewertung": "x" * 100, "groesse": "M", "risiko": "niedrig", "empfehlung": "Bereit", "antwortvorschlag": "x" * 50}, "umsetzung"),
 ])
 def test_assess_validiert_vor_dem_request(kwargs, fragment):
     calls, call = _aufzeichner()

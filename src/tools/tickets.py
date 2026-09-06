@@ -212,7 +212,7 @@ def leitplanken(subject: str, beschreibung: str) -> dict:
 
 def ticket_assess_handler(*, actor: str, ticket_id, projekt: str | None, bewertung: str, groesse: str,
                           risiko: str, empfehlung: str, loesungsvorschlag: str = "", rueckfrage: str = "",
-                          antwortvorschlag: str = "", call=_call) -> dict:
+                          antwortvorschlag: str = "", umsetzung: str = "", call=_call) -> dict:
     n = _nummer(ticket_id)
     if n is None:
         return {"ok": False, "error": "ticket_id muss eine Nummer sein."}
@@ -224,6 +224,11 @@ def ticket_assess_handler(*, actor: str, ticket_id, projekt: str | None, bewertu
         return {"ok": False, "error": f"empfehlung muss eines von {' | '.join(EMPFEHLUNGEN)} sein."}
     if (rueckfrage or "").strip() and emp != "Rückfrage":
         return {"ok": False, "error": "rueckfrage gesetzt, aber empfehlung ist nicht 'Rückfrage' — eines von beidem anpassen."}
+    u = (umsetzung or "").strip()
+    if not (u.lower() == "betreiber" or (u.lower().startswith("kunde:") and len(u) > 6)):
+        return {"ok": False, "error": "umsetzung muss 'kunde:<rolle>' (z. B. kunde:frontend-developer — die Agenten des "
+                                      "Kunden koennen es in ihrem eigenen Cockpit erledigen) oder 'betreiber' sein "
+                                      "(Host, Root, DNS, Secrets, neue Dienste, Vertrags-/Kostenentscheidung)."}
     if len((antwortvorschlag or "").strip()) < 40:
         return {"ok": False, "error": "antwortvorschlag fehlt oder ist zu kurz — drei bis fuenf freundliche Saetze, die der "
                                       "Betreiber als Antwort an den Kunden uebernehmen kann (mindestens 40 Zeichen)."}
@@ -242,6 +247,7 @@ def ticket_assess_handler(*, actor: str, ticket_id, projekt: str | None, bewertu
         "loesungsvorschlag": (loesungsvorschlag or "").strip()[:20000],
         "rueckfrage": (rueckfrage or "").strip()[:4000],
         "antwortvorschlag": (antwortvorschlag or "").strip()[:8000],
+        "umsetzung": u[:120],
         "leitplanken": lp,
     })
     if out.get("ok"):

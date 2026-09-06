@@ -512,6 +512,7 @@ if tickets.configured():
         loesungsvorschlag: str = "",
         rueckfrage: str = "",
         antwortvorschlag: str = "",
+        umsetzung: str = "",
         actor: str | None = None,
     ) -> dict:
         """
@@ -532,7 +533,12 @@ if tickets.configured():
         Status bleibt In Bewertung, die Frage stellt der Betreiber). antwortvorschlag
         (Pflicht, >= 40 Zeichen): drei bis fuenf freundliche Saetze in Kundensprache, die
         der Betreiber als Antwort uebernehmen oder anpassen kann — der Leitstand belegt
-        sein Antwortfeld damit vor.
+        sein Antwortfeld damit vor. umsetzung (Pflicht): "kunde:<rolle>" wenn die Agenten
+        des Kunden es in ihrem eigenen Cockpit erledigen koennen (frontend-developer,
+        backend-developer, app-developer, crm-manager: Website, Testumgebung, App-Zone,
+        CRM), oder "betreiber" wenn es Host/Root, DNS, Secrets, neue Dienste oder eine
+        Kosten-/Vertragsentscheidung braucht. Nach "Bereit" reicht die Wache den Task an
+        genau diese Rolle im Kunden-Cockpit ein.
 
         Vor dem Schreiben laeuft der deterministische Leitplanken-Befund ueber den
         ECHTEN Ticket-Text: BLOCK erzwingt "Nicht umsetzbar" + Risiko hoch, REVIEW
@@ -545,7 +551,7 @@ if tickets.configured():
         return tickets.ticket_assess_handler(
             actor=actor, ticket_id=ticket_id, projekt=projekt, bewertung=bewertung, groesse=groesse,
             risiko=risiko, empfehlung=empfehlung, loesungsvorschlag=loesungsvorschlag,
-            rueckfrage=rueckfrage, antwortvorschlag=antwortvorschlag,
+            rueckfrage=rueckfrage, antwortvorschlag=antwortvorschlag, umsetzung=umsetzung,
         )
 
     @mcp.tool()
